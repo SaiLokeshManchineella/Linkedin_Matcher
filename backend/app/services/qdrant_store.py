@@ -1,0 +1,67 @@
+from typing import List, Dict, Any, Tuple
+from uuid import uuid4
+from qdrant_client import QdrantClient
+from qdrant_client.http.models import Distance, VectorParams, PointStruct
+from config import settings
+
+
+class QdrantService:
+    def __init__(self) -> None:
+        self.client = QdrantClient(url=settings.qdrant_url)
+        self.collection = settings.qdrant_collection
+        self._ensure_collection()
+
+    def _ensure_collection(self) -> None:
+        if not self.client.collection_exists(self.collection):
+            self.client.create_collection(
+                collection_name=self.collection,
+                vectors_config=VectorParams(size=768, distance=Distance.COSINE),
+            )
+
+    def upsert_user(self, vector: List[float], payload: Dict[str, Any]) -> str:
+        """Store a user embedding with their profile data as payload."""
+        if len(vector) != 768:
+            raise ValueError("Embedding must be 768 dimensions.")
+        point_id = str(uuid4())
+        self.client.upsert(
+            collection_name=self.collection,
+            points=[PointStruct(id=point_id, vector=vector, payload=payload)],
+        )
+        return point_id
+
+    def find_similar_users(
+        self,
+        vector: List[float],
+        limit: int = 10,
+        threshold: float = 0.75,
+        exclude_url: str = "",
+    ) -> List[Dict[str, Any]]:
+        """Search for top similar users above the similarity threshold.
+        Returns list of dicts with 'score' and all payload fields.
+        """
+        if not vector:
+            return []
+
+        results = self.client.search(
+            collection_name=self.collection,
+            query_vector=vector,
+            limit=limit + 5,  # fetch extra to filter self-matches
+        )
+
+        matches: List[Dict[str, Any]] = []
+        for hit in results:
+            score = float(hit.score or 0.0)
+            if score < threshold:
+                continue
+            payload = hit.payload or {}
+            # Skip the current user
+            if exclude_url and payload.get("linkedin_url") == exclude_url:
+                continue
+            matches.append({
+                "similarity": round(score, 4),
+                **payload,
+            })
+            if len(matches) >= limit:
+                break
+
+        return matches

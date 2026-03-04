@@ -1,0 +1,43 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+:root {
+  color-scheme: dark;
+}
+
+body {
+  font-family: "Sora", sans-serif;
+  background: radial-gradient(1200px circle at 20% 10%, rgba(124, 246, 255, 0.15), transparent 50%),
+    radial-gradient(1000px circle at 80% 30%, rgba(139, 92, 246, 0.18), transparent 55%),
+    #0b0f1a;
+  min-height: 100vh;
+}
+
+.glass {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  box-shadow: 0 0 25px rgba(124, 246, 255, 0.15);
+  backdrop-filter: blur(12px);
+}
+
+.neon-border {
+  box-shadow: 0 0 18px rgba(124, 246, 255, 0.22), inset 0 0 18px rgba(124, 246, 255, 0.08);
+}
+
+.section-title {
+  font-family: "Space Grotesk", sans-serif;
+  letter-spacing: 0.02em;
+}
+
+.typewriter {
+  border-right: 2px solid rgba(124, 246, 255, 0.6);
+  white-space: pre-wrap;
+  animation: caret 1s steps(1) infinite;
+}
+
+@keyframes caret {
+  50% {
+    border-color: transparent;
+  }
+}

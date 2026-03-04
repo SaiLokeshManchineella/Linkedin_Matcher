@@ -1,0 +1,56 @@
+# Production Docker Compose — deploy all 4 services on EC2
+# Usage: docker-compose -f docker-compose.prod.yml up -d --build
+
+services:
+  qdrant:
+    image: qdrant/qdrant:latest
+    container_name: pro-tinder-qdrant
+    restart: unless-stopped
+    volumes:
+      - qdrant_data:/qdrant/storage
+
+  neo4j:
+    image: neo4j:5.26
+    container_name: pro-tinder-neo4j
+    restart: unless-stopped
+    environment:
+      NEO4J_AUTH: "${NEO4J_AUTH:-neo4j/password123}"
+      NEO4J_PLUGINS: '["apoc"]'
+      NEO4J_dbms_security_procedures_unrestricted: "apoc.*"
+      NEO4J_dbms_security_procedures_allowlist: "apoc.*"
+      NEO4J_apoc_export_file_enabled: "true"
+      NEO4J_apoc_import_file_enabled: "true"
+    volumes:
+      - neo4j_data:/data
+      - neo4j_logs:/logs
+      - neo4j_plugins:/plugins
+
+  backend:
+    build: ./backend
+    container_name: pro-tinder-backend
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      QDRANT_URL: "http://qdrant:6333"
+      NEO4J_URI: "bolt://neo4j:7687"
+    depends_on:
+      - qdrant
+      - neo4j
+    volumes:
+      - backend_data:/app/data
+
+  frontend:
+    build: ./frontend
+    container_name: pro-tinder-frontend
+    restart: unless-stopped
+    ports:
+      - "80:80"
+    depends_on:
+      - backend
+
+volumes:
+  qdrant_data:
+  neo4j_data:
+  neo4j_logs:
+  neo4j_plugins:
+  backend_data:
