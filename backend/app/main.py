@@ -432,7 +432,44 @@ def analyze(payload: AnalyzeRequest) -> AnalyzeResponse:
                 cached_result=fresh_result.model_dump(),
             )
 
-        # Fallback: no cached topics/vector — return stale result
+        # Fallback: old cache entry without topics/vector — recover them
+        # Try to get topics from the cached result's user_topics field
+        if not cached_topics:
+            cached_topics = existing.get("result", {}).get("user_topics", [])
+        # Regenerate vector from profile if missing
+        if not cached_vector and profile:
+            profile_text = _profile_to_text(profile)
+            cached_vector = embed_text(profile_text)
+
+        if cached_topics and cached_vector:
+            fresh_result = _run_matching(
+                normalized_url=normalized_url,
+                topics=cached_topics,
+                vector=cached_vector,
+                profile=profile,
+                profile_brief=profile_brief,
+                recent_posts=recent_posts,
+                reasoning=reasoning,
+            )
+            # Update cache with recovered topics + vector
+            _save_user_result(
+                normalized_url=normalized_url,
+                full_name=existing.get("full_name", ""),
+                result=fresh_result,
+                topics=cached_topics,
+                vector=cached_vector,
+            )
+            return AnalyzeResponse(
+                profile={},
+                recent_posts=[],
+                questions=[],
+                reasoning="",
+                returning_user=True,
+                returning_full_name=existing.get("full_name", ""),
+                cached_result=fresh_result.model_dump(),
+            )
+
+        # Last resort: return whatever was in cache
         return AnalyzeResponse(
             profile={},
             recent_posts=[],
