@@ -35,6 +35,23 @@ class QdrantService:
         )
         return point_id
 
+    def get_user_vector(self, linkedin_url: str) -> List[float]:
+        """Retrieve the stored vector for a user by their linkedin_url.
+        Returns the vector if found, empty list otherwise.
+        """
+        point_id = self._url_to_point_id(linkedin_url)
+        try:
+            points = self.client.retrieve(
+                collection_name=self.collection,
+                ids=[point_id],
+                with_vectors=True,
+            )
+            if points and points[0].vector:
+                return list(points[0].vector)
+        except Exception:
+            pass
+        return []
+
     def find_similar_users(
         self,
         vector: List[float],

@@ -436,10 +436,10 @@ def analyze(payload: AnalyzeRequest) -> AnalyzeResponse:
         # Try to get topics from the cached result's user_topics field
         if not cached_topics:
             cached_topics = existing.get("result", {}).get("user_topics", [])
-        # Regenerate vector from profile if missing
-        if not cached_vector and profile:
-            profile_text = _profile_to_text(profile)
-            cached_vector = embed_text(profile_text)
+        # Read the ORIGINAL vector from Qdrant (has profile+answers quality)
+        # instead of regenerating a degraded profile-only vector
+        if not cached_vector:
+            cached_vector = qdrant_service.get_user_vector(normalized_url)
 
         if cached_topics and cached_vector:
             fresh_result = _run_matching(
