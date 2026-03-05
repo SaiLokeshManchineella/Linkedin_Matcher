@@ -147,27 +147,31 @@ Results are **deduplicated** — if someone appears in both Qdrant and Neo4j res
 ## Notes
 - RapidAPI `fresh-linkedin-profile-data` response shape can vary. Adjust `backend/app/services/scraping.py` if the payload differs.
 - The default Qdrant similarity threshold is `0.75` and can be tuned via `QDRANT_SIMILARITY_THRESHOLD` in `.env`.
-- Returning users are recognized and shown cached results instantly.
+- Returning users are recognized automatically — they skip questions and get **fresh matches** (not stale cached data).
 
 ## 6) Deploy to AWS EC2 (Production)
 
-Prerequisites: an EC2 instance (Ubuntu 22.04+, t3.medium or larger recommended) with port 80 open in the security group.
+Prerequisites: an EC2 instance (Ubuntu 22.04+, t3.medium or larger recommended) with ports 80, 8001, and 22 open in the security group.
 
 **SSH into your EC2 instance and run:**
 
 ```bash
 # Clone the repo
-git clone https://github.com/YOUR_USERNAME/Linkedin_Matcher.git
+git clone https://github.com/SaiLokeshManchineella/Linkedin_Matcher.git
 cd Linkedin_Matcher
 
-# Create .env from template and fill in your API keys
-cp .env.example .env
-nano .env  # Set OPENAI_API_KEY and RAPIDAPI_KEY
-
-# Run the deploy script (installs Docker + starts all services)
+# Run the deploy script — it will ask for your EC2 public IP and API keys
 chmod +x deploy.sh
 ./deploy.sh
 ```
+
+The script will:
+1. Ask for your **EC2 public IP**, **OPENAI_API_KEY**, and **RAPIDAPI_KEY**
+2. Auto-generate `.env` with all values
+3. Install Docker, Node.js 20, Python3, PM2
+4. Start Qdrant + Neo4j in Docker
+5. Build and serve the frontend via PM2 (port 80)
+6. Start the backend via nohup (port 8001)
 
 The app will be accessible at `http://YOUR_EC2_PUBLIC_IP`.
 
@@ -175,11 +179,15 @@ The app will be accessible at `http://YOUR_EC2_PUBLIC_IP`.
 | Type | Port | Source |
 |------|------|--------|
 | HTTP | 80 | 0.0.0.0/0 |
+| Custom TCP | 8001 | 0.0.0.0/0 |
 | SSH | 22 | Your IP |
 
 **Useful commands:**
 ```bash
-docker compose -f docker-compose.prod.yml logs -f         # View logs
-docker compose -f docker-compose.prod.yml restart backend  # Restart backend
-docker compose -f docker-compose.prod.yml down             # Stop all
+pm2 status                              # Check frontend
+pm2 logs pro-tinder-frontend             # Frontend logs
+tail -f backend.log                      # Backend logs
+sudo docker compose logs -f              # Qdrant + Neo4j logs
+pkill -f 'uvicorn main:app'              # Stop backend
+pm2 restart pro-tinder-frontend           # Restart frontend
 ```
