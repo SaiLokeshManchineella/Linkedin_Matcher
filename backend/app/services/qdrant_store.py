@@ -1,5 +1,6 @@
 from typing import List, Dict, Any, Tuple
-from uuid import uuid4
+import hashlib
+from uuid import UUID
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Distance, VectorParams, PointStruct
 from config import settings
@@ -18,11 +19,16 @@ class QdrantService:
                 vectors_config=VectorParams(size=768, distance=Distance.COSINE),
             )
 
+    @staticmethod
+    def _url_to_point_id(linkedin_url: str) -> str:
+        """Deterministic UUID from linkedin_url so re-submissions update the same point."""
+        return str(UUID(hashlib.md5(linkedin_url.encode()).hexdigest()))
+
     def upsert_user(self, vector: List[float], payload: Dict[str, Any]) -> str:
         """Store a user embedding with their profile data as payload."""
         if len(vector) != 768:
             raise ValueError("Embedding must be 768 dimensions.")
-        point_id = str(uuid4())
+        point_id = self._url_to_point_id(payload.get("linkedin_url", ""))
         self.client.upsert(
             collection_name=self.collection,
             points=[PointStruct(id=point_id, vector=vector, payload=payload)],
