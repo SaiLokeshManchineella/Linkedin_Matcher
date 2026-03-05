@@ -57,7 +57,13 @@ def _load_results_cache() -> Dict[str, Any]:
     return {}
 
 
-def _save_user_result(normalized_url: str, full_name: str, result: SubmitAnswersResponse) -> None:
+def _save_user_result(
+    normalized_url: str,
+    full_name: str,
+    result: SubmitAnswersResponse,
+    topics: List[str] | None = None,
+    vector: List[float] | None = None,
+) -> None:
     try:
         RESULTS_CACHE_FILE.parent.mkdir(parents=True, exist_ok=True)
         cache = _load_results_cache()
@@ -65,6 +71,8 @@ def _save_user_result(normalized_url: str, full_name: str, result: SubmitAnswers
             "saved_at": int(time.time()),
             "full_name": full_name,
             "result": result.model_dump(),
+            "topics": topics or [],
+            "vector": vector or [],
         }
         with open(RESULTS_CACHE_FILE, "w", encoding="utf-8") as f:
             json.dump(cache, f, ensure_ascii=True, indent=2)
@@ -76,6 +84,135 @@ def _get_user_result(normalized_url: str) -> Optional[Dict[str, Any]]:
     cache = _load_results_cache()
     record = cache.get(normalized_url)
     return record if isinstance(record, dict) else None
+
+
+# ---- Matching pipeline (shared by /analyze returning-user and /submit_answers) ----
+
+def _run_matching(
+    normalized_url: str,
+    topics: List[str],
+    vector: List[float],
+    profile: dict,
+    profile_brief: str,
+    recent_posts: List[str],
+    reasoning: str,
+) -> SubmitAnswersResponse:
+    """Run the 3-source matching pipeline and return fresh results."""
+    assert qdrant_service is not None
+    assert graph_service is not None
+
+    has_valid_vector = len(vector) == 768
+    signals = _profile_signals(profile, recent_posts)
+
+    # Ensure user is in Qdrant
+    if has_valid_vector:
+        user_payload = {
+            "linkedin_url": normalized_url,
+            "fullName": profile.get("fullName", ""),
+            "headline": profile.get("headline", ""),
+            "profile_image_url": profile.get("profile_image_url", ""),
+            "topics": topics,
+            "about": (profile.get("about") or "")[:300],
+            "company": profile.get("company", ""),
+            "location": profile.get("location", ""),
+        }
+        qdrant_service.upsert_user(vector, user_payload)
+
+    # Ensure user is in Neo4j graph
+    graph_service.write_user_graph(
+        linkedin_url=normalized_url,
+        full_name=profile.get("fullName", ""),
+        headline=profile.get("headline", ""),
+        profile_image_url=profile.get("profile_image_url", ""),
+        topics=topics,
+        reasoning=reasoning,
+    )
+
+    # ---- Source 1: Qdrant vector similarity ----
+    db_matches: List[Dict[str, Any]] = []
+    if has_valid_vector:
+        db_matches = qdrant_service.find_similar_users(
+            vector,
+            limit=TARGET_MATCHES,
+            threshold=SIMILARITY_THRESHOLD,
+            exclude_url=normalized_url,
+        )
+
+    seen_urls = {m.get("linkedin_url", "") for m in db_matches}
+    seen_urls.add(normalized_url)
+
+    # ---- Source 2: Neo4j graph (shared topics) ----
+    graph_matches: List[Dict[str, Any]] = []
+    remaining = TARGET_MATCHES - len(db_matches)
+    if remaining > 0:
+        raw_graph = graph_service.find_similar_by_topics(
+            linkedin_url=normalized_url,
+            limit=remaining + 5,
+        )
+        for gm in raw_graph:
+            if gm.get("linkedin_url") in seen_urls:
+                continue
+            seen_urls.add(gm["linkedin_url"])
+            graph_matches.append(gm)
+            if len(graph_matches) >= remaining:
+                break
+
+    # ---- Source 3: LinkedIn keyword search (backfill) ----
+    linkedin_matches: List[Dict[str, Any]] = []
+    remaining = TARGET_MATCHES - len(db_matches) - len(graph_matches)
+    if remaining > 0 and topics:
+        search_keywords = ", ".join(topics[:3])
+        linkedin_profiles = search_linkedin_by_keywords(search_keywords, limit=remaining + 5)
+
+        for lp in linkedin_profiles:
+            if lp.get("linkedin_url") in seen_urls:
+                continue
+            seen_urls.add(lp["linkedin_url"])
+            lp["source"] = "linkedin_search"
+            lp["similarity"] = 0.0
+            lp["topics"] = topics[:3]
+            linkedin_matches.append(lp)
+            if len(linkedin_matches) >= remaining:
+                break
+
+    # Build final matched users list (priority: Qdrant > Graph > LinkedIn)
+    all_matches = db_matches + graph_matches + linkedin_matches
+
+    # Generate per-user match reasons using AI
+    if all_matches:
+        match_names = [m.get("fullName", "Unknown") for m in all_matches]
+        match_headlines = [m.get("headline", "") for m in all_matches]
+        reasons = generate_match_reasons(
+            user_name=profile.get("fullName", ""),
+            user_brief=profile_brief,
+            match_names=match_names,
+            match_headlines=match_headlines,
+        )
+    else:
+        reasons = []
+
+    matched_users: List[MatchedUser] = []
+    for i, m in enumerate(all_matches[:TARGET_MATCHES]):
+        reason = reasons[i] if i < len(reasons) else "Similar professional profile and interests."
+        matched_users.append(MatchedUser(
+            fullName=m.get("fullName", ""),
+            headline=m.get("headline", ""),
+            linkedin_url=m.get("linkedin_url", ""),
+            profile_image_url=m.get("profile_image_url", ""),
+            similarity=m.get("similarity", 0.0),
+            topics=m.get("topics", topics[:3]),
+            reason=reason,
+            source=m.get("source", "qdrant"),
+        ))
+
+    return SubmitAnswersResponse(
+        user_topics=topics,
+        user_reasoning=reasoning,
+        matched_users=matched_users,
+        total_from_db=len(db_matches),
+        total_from_graph=len(graph_matches),
+        total_from_linkedin=len(linkedin_matches),
+    )
 
 
 # ---- Profile helpers ----
@@ -246,9 +383,56 @@ def health() -> dict:
 def analyze(payload: AnalyzeRequest) -> AnalyzeResponse:
     normalized_url = normalize_linkedin_url(payload.linkedin_url)
 
-    # ---- Returning-user fast path ----
+    # ---- Returning-user: skip questions but re-run matching for fresh results ----
     existing = _get_user_result(normalized_url)
     if existing:
+        cached_topics = existing.get("topics", [])
+        cached_vector = existing.get("vector", [])
+
+        # Re-fetch profile from cache (no API call — scraping cache handles this)
+        profile = fetch_linkedin_profile(normalized_url)
+        if profile.get("error"):
+            profile = {}  # fallback: proceed without profile
+
+        urn = profile.get("urn", "")
+        recent_posts = fetch_recent_posts(normalized_url, urn, limit=15) if urn else []
+        profile_text = _profile_to_text(profile)
+        signals = _profile_signals(profile, recent_posts)
+        profile_brief = _profile_brief(signals)
+        reasoning = existing.get("result", {}).get("user_reasoning", "")
+        if not reasoning:
+            reasoning = _fallback_reasoning(signals)
+
+        # Re-run matching with stored topics + vector for FRESH results
+        if cached_topics and cached_vector:
+            fresh_result = _run_matching(
+                normalized_url=normalized_url,
+                topics=cached_topics,
+                vector=cached_vector,
+                profile=profile,
+                profile_brief=profile_brief,
+                recent_posts=recent_posts,
+                reasoning=reasoning,
+            )
+            # Update cache with fresh results
+            _save_user_result(
+                normalized_url=normalized_url,
+                full_name=existing.get("full_name", ""),
+                result=fresh_result,
+                topics=cached_topics,
+                vector=cached_vector,
+            )
+            return AnalyzeResponse(
+                profile={},
+                recent_posts=[],
+                questions=[],
+                reasoning="",
+                returning_user=True,
+                returning_full_name=existing.get("full_name", ""),
+                cached_result=fresh_result.model_dump(),
+            )
+
+        # Fallback: no cached topics/vector — return stale result
         return AnalyzeResponse(
             profile={},
             recent_posts=[],
@@ -318,128 +502,30 @@ def submit_answers(payload: SubmitAnswersRequest) -> SubmitAnswersResponse:
     # Build embedding from profile summary + answers
     embed_input = f"{profile_text}\n\n{answers_blob}"
     vector = embed_text(embed_input)
-    has_valid_vector = len(vector) == 768
-
-    # Store current user in Qdrant
-    if has_valid_vector:
-        user_payload = {
-            "linkedin_url": normalized_url,
-            "fullName": profile.get("fullName", ""),
-            "headline": profile.get("headline", ""),
-            "profile_image_url": profile.get("profile_image_url", ""),
-            "topics": topics,
-            "about": (profile.get("about") or "")[:300],
-            "company": profile.get("company", ""),
-            "location": profile.get("location", ""),
-        }
-        qdrant_service.upsert_user(vector, user_payload)
 
     # Generate reasoning for current user
     reasoning = generate_reasoning(profile_brief, recent_posts, answers_blob)
     if not reasoning.strip():
         reasoning = _fallback_reasoning(signals)
 
-    # Write to graph BEFORE querying so our topics are available for matches
-    graph_service.write_user_graph(
-        linkedin_url=normalized_url,
-        full_name=profile.get("fullName", ""),
-        headline=profile.get("headline", ""),
-        profile_image_url=profile.get("profile_image_url", ""),
+    # Run the full 3-source matching pipeline
+    response = _run_matching(
+        normalized_url=normalized_url,
         topics=topics,
+        vector=vector,
+        profile=profile,
+        profile_brief=profile_brief,
+        recent_posts=recent_posts,
         reasoning=reasoning,
     )
 
-    # ---- Source 1: Qdrant vector similarity ----
-    db_matches: List[Dict[str, Any]] = []
-    if has_valid_vector:
-        db_matches = qdrant_service.find_similar_users(
-            vector,
-            limit=TARGET_MATCHES,
-            threshold=SIMILARITY_THRESHOLD,
-            exclude_url=normalized_url,
-        )
-
-    seen_urls = {m.get("linkedin_url", "") for m in db_matches}
-    seen_urls.add(normalized_url)
-
-    # ---- Source 2: Neo4j graph (shared topics) ----
-    graph_matches: List[Dict[str, Any]] = []
-    remaining = TARGET_MATCHES - len(db_matches)
-    if remaining > 0:
-        raw_graph = graph_service.find_similar_by_topics(
-            linkedin_url=normalized_url,
-            limit=remaining + 5,
-        )
-        for gm in raw_graph:
-            if gm.get("linkedin_url") in seen_urls:
-                continue
-            seen_urls.add(gm["linkedin_url"])
-            graph_matches.append(gm)
-            if len(graph_matches) >= remaining:
-                break
-
-    # ---- Source 3: LinkedIn keyword search (backfill) ----
-    linkedin_matches: List[Dict[str, Any]] = []
-    remaining = TARGET_MATCHES - len(db_matches) - len(graph_matches)
-    if remaining > 0 and topics:
-        search_keywords = ", ".join(topics[:3])
-        linkedin_profiles = search_linkedin_by_keywords(search_keywords, limit=remaining + 5)
-
-        for lp in linkedin_profiles:
-            if lp.get("linkedin_url") in seen_urls:
-                continue
-            seen_urls.add(lp["linkedin_url"])
-            lp["source"] = "linkedin_search"
-            lp["similarity"] = 0.0
-            lp["topics"] = topics[:3]
-            linkedin_matches.append(lp)
-            if len(linkedin_matches) >= remaining:
-                break
-
-    # Build final matched users list (priority: Qdrant > Graph > LinkedIn)
-    all_matches = db_matches + graph_matches + linkedin_matches
-
-    # Generate per-user match reasons using AI
-    if all_matches:
-        match_names = [m.get("fullName", "Unknown") for m in all_matches]
-        match_headlines = [m.get("headline", "") for m in all_matches]
-        reasons = generate_match_reasons(
-            user_name=profile.get("fullName", ""),
-            user_brief=profile_brief,
-            match_names=match_names,
-            match_headlines=match_headlines,
-        )
-    else:
-        reasons = []
-
-    matched_users: List[MatchedUser] = []
-    for i, m in enumerate(all_matches[:TARGET_MATCHES]):
-        reason = reasons[i] if i < len(reasons) else "Similar professional profile and interests."
-        matched_users.append(MatchedUser(
-            fullName=m.get("fullName", ""),
-            headline=m.get("headline", ""),
-            linkedin_url=m.get("linkedin_url", ""),
-            profile_image_url=m.get("profile_image_url", ""),
-            similarity=m.get("similarity", 0.0),
-            topics=m.get("topics", topics[:3]),
-            reason=reason,
-            source=m.get("source", "qdrant"),
-        ))
-
-    response = SubmitAnswersResponse(
-        user_topics=topics,
-        user_reasoning=reasoning,
-        matched_users=matched_users,
-        total_from_db=len(db_matches),
-        total_from_graph=len(graph_matches),
-        total_from_linkedin=len(linkedin_matches),
-    )
-
-    # Persist result so this user is recognised on their next visit
+    # Persist result + topics + vector for returning-user re-matching
     _save_user_result(
         normalized_url=normalized_url,
         full_name=profile.get("fullName", ""),
         result=response,
+        topics=topics,
+        vector=vector,
     )
 
     return response
