@@ -10,6 +10,29 @@ A professional DNA matchmaker that scrapes LinkedIn profiles, generates personal
 - **LinkedIn Data**: RapidAPI `fresh-linkedin-profile-data`
 - **Frontend**: React 18 + Vite + TailwindCSS + Framer Motion
 
+## Architecture Diagram
+
+```mermaid
+graph TD
+    User([User]) -->|Submits LinkedIn URL & Answers| Frontend[React + Vite Frontend]
+    Frontend -->|REST API Requests| Backend[FastAPI Backend]
+
+    subgraph External APIs
+        Backend -->|1. Fetch Profile & Posts| RapidAPI[RapidAPI]
+        Backend -->|2. Generate Embeddings & Topics| OpenAI[OpenAI]
+        Backend -.->|Fallback Keyword Search| RapidAPI
+    end
+
+    subgraph Infrastructure
+        Backend <-->|Vector Retrieval| Qdrant[(Qdrant Database)]
+        Backend <-->|Graph Traversal| Neo4j[(Neo4j Database)]
+        Backend <-->|Session Caching| Cache[(Local JSON Cache)]
+    end
+
+    Qdrant -.->|High Confidence Matches| Backend
+    Neo4j -.->|Shared Interest Matches| Backend
+```
+
 ## 1) Environment Setup
 
 Create your runtime env file from the template:
