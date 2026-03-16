@@ -59,12 +59,13 @@ _reasoning_chain = (
 
 _match_reasons_chain = (
     PromptTemplate(
-        input_variables=["user_name", "user_brief", "matches_blob"],
+        input_variables=["user_name", "user_brief", "matches_blob", "match_count"],
         template=(
-            "You are given a LinkedIn user and a list of matched professionals.\n"
+            "You are given a LinkedIn user and a list of {match_count} matched professionals.\n"
             "For EACH match, write ONE short sentence (max 25 words) explaining WHY they are a good match for the user.\n"
             "Focus on shared skills, industries, roles, or complementary expertise.\n"
-            "Return strict JSON: {{\"reasons\":[\"...\",\"...\",\"...\"]}}\n\n"
+            "You MUST return exactly {match_count} reasons.\n"
+            "Return strict JSON: {{\"reasons\":[\"...\", \"...\", \"...\"]}}\n\n"
             "User: {user_name}\n{user_brief}\n\n"
             "Matched Professionals:\n{matches_blob}\n"
         ),
@@ -149,11 +150,13 @@ def generate_match_reasons(
     matches_blob = "\n".join(
         [f"{i+1}. {n} — {h}" for i, (n, h) in enumerate(zip(match_names, match_headlines))]
     )
+    match_count = len(match_names)
     try:
         text = _match_reasons_chain.invoke({
             "user_name": user_name,
             "user_brief": user_brief,
             "matches_blob": matches_blob,
+            "match_count": match_count,
         })
         json_match = re.search(r"\{[\s\S]*\}", text)
         if json_match:

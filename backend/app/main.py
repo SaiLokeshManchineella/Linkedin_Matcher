@@ -129,17 +129,25 @@ def _run_matching(
     )
 
     # ---- Source 1: Qdrant vector similarity ----
-    db_matches: List[Dict[str, Any]] = []
+    raw_db_matches: List[Dict[str, Any]] = []
     if has_valid_vector:
-        db_matches = qdrant_service.find_similar_users(
+        raw_db_matches = qdrant_service.find_similar_users(
             vector,
-            limit=TARGET_MATCHES,
+            limit=TARGET_MATCHES * 2, # Fetch more to account for duplicates
             threshold=SIMILARITY_THRESHOLD,
             exclude_url=normalized_url,
         )
 
-    seen_urls = {m.get("linkedin_url", "") for m in db_matches}
-    seen_urls.add(normalized_url)
+    # Deduplicate db_matches by URL
+    db_matches: List[Dict[str, Any]] = []
+    seen_urls = {normalized_url}
+    for m in raw_db_matches:
+        url = m.get("linkedin_url", "")
+        if url and url not in seen_urls:
+            seen_urls.add(url)
+            db_matches.append(m)
+            if len(db_matches) >= TARGET_MATCHES:
+                break
 
     # ---- Source 2: Neo4j graph (shared topics) ----
     graph_matches: List[Dict[str, Any]] = []
@@ -382,9 +390,25 @@ def health() -> dict:
 @app.post("/analyze", response_model=AnalyzeResponse)
 def analyze(payload: AnalyzeRequest) -> AnalyzeResponse:
     normalized_url = normalize_linkedin_url(payload.linkedin_url)
+    print(f"[DEBUG] Incoming URL: {payload.linkedin_url}")
+    print(f"[DEBUG] Normalized URL: {normalized_url}")
 
     # ---- Returning-user: skip questions but re-run matching for fresh results ----
     existing = _get_user_result(normalized_url)
+    
+    # Check Qdrant if not found in local cache
+    if not existing:
+        qdrant_data = qdrant_service.get_user_data(normalized_url)
+        if qdrant_data and qdrant_data.get("vector") and qdrant_data.get("payload"):
+            payload = qdrant_data["payload"]
+            existing = {
+                "full_name": payload.get("fullName", ""),
+                "topics": payload.get("topics", []),
+                "vector": qdrant_data["vector"],
+                "result": {"user_reasoning": "Returning user found in database."}
+            }
+
+    print(f"[DEBUG] Cache hit: {bool(existing)}")
     if existing:
         cached_topics = existing.get("topics", [])
         cached_vector = existing.get("vector", [])

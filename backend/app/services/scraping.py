@@ -293,6 +293,7 @@ def search_linkedin_by_keywords(keywords: str, limit: int = 15) -> List[Dict[str
                 "author_industry": [],
                 "author_keyword": "",
                 "page": 1,
+                "author_type": "Member", # Ensure we only get people
             },
             timeout=60,
         )
@@ -311,7 +312,7 @@ def search_linkedin_by_keywords(keywords: str, limit: int = 15) -> List[Dict[str
             name = (item.get("poster_name") or "").strip()
             title = (item.get("poster_title") or "").strip()
             post_text = (item.get("text") or "").strip()
-            if not url or url in seen_urls or not name:
+            if not url or url in seen_urls or not name or "/company/" in url:
                 continue
             seen_urls.add(url)
             profiles.append({

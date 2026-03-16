@@ -1,8 +1,9 @@
-from typing import List, Dict, Any, Tuple
+from typing import List, Dict, Any, Tuple, Optional
 import hashlib
 from uuid import UUID
 from qdrant_client import QdrantClient
 from qdrant_client.http.models import Distance, VectorParams, PointStruct
+from qdrant_client.http import models
 from config import settings
 
 
@@ -51,6 +52,34 @@ class QdrantService:
         except Exception:
             pass
         return []
+
+    def get_user_data(self, linkedin_url: str) -> Optional[Dict[str, Any]]:
+        """Retrieve the stored payload and vector for a user by their linkedin_url.
+        Returns dict containing 'vector' and 'payload' if found, None otherwise.
+        """
+        try:
+            records, _ = self.client.scroll(
+                collection_name=self.collection,
+                scroll_filter=models.Filter(
+                    must=[
+                        models.FieldCondition(
+                            key="linkedin_url",
+                            match=models.MatchValue(value=linkedin_url)
+                        )
+                    ]
+                ),
+                limit=1,
+                with_vectors=True,
+                with_payload=True,
+            )
+            if records:
+                return {
+                    "vector": list(records[0].vector) if records[0].vector else [],
+                    "payload": records[0].payload or {}
+                }
+        except Exception:
+            pass
+        return None
 
     def find_similar_users(
         self,

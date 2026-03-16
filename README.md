@@ -167,13 +167,12 @@ chmod +x deploy.sh
 
 The script will:
 1. Ask for your **EC2 public IP**, **OPENAI_API_KEY**, and **RAPIDAPI_KEY**
-2. Auto-generate `.env` with all values
-3. Install Docker, Node.js 20, Python3, PM2
-4. Start Qdrant + Neo4j in Docker
-5. Build and serve the frontend via PM2 (port 80)
-6. Start the backend via nohup (port 8001)
+2. Auto-generate `.env` with all values configured for production
+3. Install Docker
+4. Build and start the entire stack (Frontend, Backend, Qdrant, Neo4j) securely using `docker-compose.prod.yml`
 
-The app will be accessible at `http://YOUR_EC2_PUBLIC_IP`.
+The app frontend will be automatically accessible at `http://YOUR_EC2_PUBLIC_IP`.
+The backend API and Swagger docs will be accessible at `http://YOUR_EC2_PUBLIC_IP:8001/docs`.
 
 **EC2 Security Group rules needed:**
 | Type | Port | Source |
@@ -184,10 +183,15 @@ The app will be accessible at `http://YOUR_EC2_PUBLIC_IP`.
 
 **Useful commands:**
 ```bash
-pm2 status                              # Check frontend
-pm2 logs pro-tinder-frontend             # Frontend logs
-tail -f backend.log                      # Backend logs
-sudo docker compose logs -f              # Qdrant + Neo4j logs
-pkill -f 'uvicorn main:app'              # Stop backend
-pm2 restart pro-tinder-frontend           # Restart frontend
+# View logs for all services
+sudo docker compose -f docker-compose.prod.yml logs -f
+
+# View logs for a specific service (e.g., backend)
+sudo docker compose -f docker-compose.prod.yml logs -f backend
+
+# Restart the frontend
+sudo docker compose -f docker-compose.prod.yml restart frontend
+
+# Take down the entire stack
+sudo docker compose -f docker-compose.prod.yml down
 ```
