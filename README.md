@@ -105,7 +105,6 @@ docker-compose down -v
 3. **Answer the questions** → backend extracts 5-8 professional interest topics and creates a 768-dimensional embedding vector from your profile + answers
 4. **3-source matching engine finds similar professionals** (see below)
 5. **AI generates a personalized reason** explaining WHY each matched person is relevant to you
-6. **Intelligent "See More" Toggle** — Match reasons are clamped to 3 lines by default to keep the UI clean. An intelligent toggle automatically appears only if the reason text is truncated, allowing you to expand it on demand.
 
 ### Matching Engine (3 Sources)
 
