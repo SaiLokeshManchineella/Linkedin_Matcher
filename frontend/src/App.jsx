@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import Typewriter from "./components/Typewriter.jsx";
 
@@ -51,6 +51,30 @@ export default function App() {
   const [error, setError] = useState("");
   const [isReturningUser, setIsReturningUser] = useState(false);
   const [returningFullName, setReturningFullName] = useState("");
+  const [expandedReasons, setExpandedReasons] = useState({});
+  const reasonRefs = useRef({});
+  const [overflowMap, setOverflowMap] = useState({});
+
+  // Detect which reason paragraphs are actually overflowing (clamped by CSS)
+  useEffect(() => {
+    const checkOverflows = () => {
+      const newMap = {};
+      Object.entries(reasonRefs.current).forEach(([idx, el]) => {
+        if (el) {
+          // scrollHeight > clientHeight means text is being truncated by line-clamp
+          newMap[idx] = el.scrollHeight > el.clientHeight;
+        }
+      });
+      setOverflowMap(newMap);
+    };
+    // Run after DOM paint and animations
+    const timer = setTimeout(checkOverflows, 500);
+    window.addEventListener("resize", checkOverflows);
+    return () => {
+      clearTimeout(timer);
+      window.removeEventListener("resize", checkOverflows);
+    };
+  }, [result, expandedReasons, step]);
 
   const canAnalyze = linkedinUrl.trim();
 
@@ -402,9 +426,27 @@ export default function App() {
                         </span>
                       )}
 
-                      <p className="text-xs text-slate-300 line-clamp-3">
-                        {user.reason || "Similar professional profile."}
-                      </p>
+                      <div>
+                        <p
+                          ref={(el) => { reasonRefs.current[idx] = el; }}
+                          className={`text-xs text-slate-300 ${expandedReasons[idx] ? "" : "line-clamp-3"}`}
+                        >
+                          {user.reason || "Similar professional profile."}
+                        </p>
+                        {(overflowMap[idx] || expandedReasons[idx]) && (
+                          <button
+                            onClick={() =>
+                              setExpandedReasons((prev) => ({
+                                ...prev,
+                                [idx]: !prev[idx],
+                              }))
+                            }
+                            className="mt-1 text-[11px] font-medium text-neon hover:underline transition"
+                          >
+                            {expandedReasons[idx] ? "See less" : "See more"}
+                          </button>
+                        )}
+                      </div>
 
                       {user.topics?.length > 0 && (
                         <div className="flex flex-wrap gap-1 mt-auto">
