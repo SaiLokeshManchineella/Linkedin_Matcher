@@ -123,6 +123,36 @@ docker-compose down -v
 
 ### User Flow
 
+```mermaid
+sequenceDiagram
+    actor User
+    participant Frontend
+    participant Backend
+    participant RapidAPI as RapidAPI (LinkedIn)
+    participant OpenAI
+    participant DB as Qdrant/Neo4j
+
+    User->>Frontend: 1. Submit LinkedIn URL
+    Frontend->>Backend: Analyze Route
+    Backend->>RapidAPI: Scrape Profile & Posts
+    RapidAPI-->>Backend: Profile Data
+    Backend->>OpenAI: 2. Generate 5 Behavioral Questions
+    OpenAI-->>Backend: Custom Questions
+    Backend-->>Frontend: Display Questions
+    
+    User->>Frontend: 3. Submit Answers
+    Frontend->>Backend: Submit Route
+    Backend->>OpenAI: Extract Topics & Create Embedding
+    OpenAI-->>Backend: [Topics] + Vector
+    Backend->>DB: Store User Data
+    
+    Backend->>DB: 4. Search Similar Professionals
+    DB-->>Backend: Raw Matches
+    Backend->>OpenAI: 5. Generate "Why" Reasons
+    OpenAI-->>Backend: Personalized Reasons
+    Backend-->>Frontend: Display Matches
+```
+
 1. **Paste a LinkedIn URL** → backend scrapes the profile (name, headline, skills, experience, education) and recent posts via RapidAPI
 2. **AI generates 5 personalized behavioral questions** based on your specific role, skills, company, and recent posts — not generic templates
 3. **Answer the questions** → backend extracts 5-8 professional interest topics and creates a 768-dimensional embedding vector from your profile + answers
